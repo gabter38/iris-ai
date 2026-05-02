@@ -1,0 +1,10 @@
+{
+  "name": "iris-ai",
+  "version": "1.0.0",
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm start",
+    "dev": "npm run start:backend & npm run start:frontend"
+  }
+}

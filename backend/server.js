@@ -1,64 +1,73 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_API = 'https://api.groq.com/openai/v1/chat/completions';
 
-// Chat endpoint
+// Modèles autorisés (whitelist)
+const ALLOWED_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+];
+
 app.post('/api/chat', async (req, res) => {
-  const { messages, mode } = req.body;
+  const { messages, systemPrompt, model } = req.body;
 
-  const systemPrompt = mode === 'code'
-    ? `Tu es Iris, une IA experte en programmation. Tu écris du code propre, commenté, et expliques chaque étape. Tu maîtrises tous les langages: Python, JavaScript, HTML/CSS, C++, Java, Bash, etc. Tu identifies les bugs rapidement et proposes des solutions optimisées.`
-    : `Tu es Iris, une IA assistante intelligente, sympathique et polyvalente. Tu réponds en français par défaut sauf si on te parle dans une autre langue. Tu es directe, utile, et honnête.`;
+  // Utilise le modèle envoyé ou le défaut
+  const selectedModel = ALLOWED_MODELS.includes(model)
+    ? model
+    : 'llama-3.3-70b-versatile';
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
 
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const groqRes = await fetch(GROQ_API, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: selectedModel,
         messages: [
-          { role: 'system', content: systemPrompt },
-          ...messages
+          { role: 'system', content: systemPrompt || 'Tu es Iris, une assistante IA utile.' },
+          ...messages,
         ],
+        stream: true,
         max_tokens: 4096,
-        temperature: mode === 'code' ? 0.2 : 0.7,
-        stream: true
-      })
+        temperature: 0.7,
+      }),
     });
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+    if (!groqRes.ok) {
+      const err = await groqRes.text();
+      console.error('Groq error:', err);
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Erreur API Groq. Vérifiez votre clé dans .env' } }] })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
 
-    response.body.on('data', chunk => res.write(chunk));
-    response.body.on('end', () => res.end());
-    response.body.on('error', err => {
-      console.error(err);
-      res.end();
-    });
+    groqRes.body.on('data', chunk => res.write(chunk));
+    groqRes.body.on('end', () => { res.write('data: [DONE]\n\n'); res.end(); });
+    groqRes.body.on('error', () => res.end());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Erreur interne du serveur.' } }] })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
   }
 });
 
-// Image generation endpoint (using Pollinations.ai - FREE)
-app.post('/api/image', async (req, res) => {
-  const { prompt } = req.body;
-  const encoded = encodeURIComponent(prompt);
-  const seed = Math.floor(Math.random() * 999999);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&seed=${seed}&nologo=true`;
-  res.json({ url });
-});
+app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '5.0' }));
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Iris AI backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Iris AI backend v5 — port ${PORT}`));
